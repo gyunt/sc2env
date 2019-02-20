@@ -1,0 +1,6 @@
+setup.py
+sc2env.egg-info/PKG-INFO
+sc2env.egg-info/SOURCES.txt
+sc2env.egg-info/dependency_links.txt
+sc2env.egg-info/requires.txt
+sc2env.egg-info/top_level.txt
