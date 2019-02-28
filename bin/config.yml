@@ -1,0 +1,11 @@
+alg: 'ppo2'
+# alg: 'acer'
+# alg: her'
+env: 'SC2MoveToBeacon-v0'
+save_path: '~/models/SC2MoveToBeacon-v0/'
+network: 'cnn'
+num_env: 4
+nminibatches: 2
+nsteps: 200
+save_interval: 200
+

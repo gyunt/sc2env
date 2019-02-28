@@ -1,18 +1,21 @@
 import multiprocessing
-import os.path as osp
+import os.path
 import sys
+from argparse import _StoreAction
 from collections import defaultdict
 from importlib import import_module
 
 import gym
 import numpy as np
 import tensorflow as tf
+import yaml
 from baselines import logger
 from baselines.common.cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_env
 from baselines.common.tf_util import get_session, display_var_info
 from baselines.common.vec_env.vec_frame_stack import VecFrameStack
 from baselines.common.vec_env.vec_normalize import VecNormalize
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
+from sc2env.utils import Arguments
 
 try:
     from mpi4py import MPI
@@ -76,7 +79,7 @@ def train(args, extra_args):
 
     env = build_env(args)
     if args.save_video_interval != 0:
-        env = VecVideoRecorder(env, osp.join(logger.Logger.CURRENT.dir, "videos"),
+        env = VecVideoRecorder(env, os.path.join(logger.Logger.CURRENT.dir, "videos"),
                                record_video_trigger=lambda x: x % args.save_video_interval == 0,
                                video_length=args.save_video_length)
 
@@ -220,35 +223,22 @@ def parse_cmdline_kwargs(args):
     return {k: parse(v) for k, v in parse_unknown_args(args).items()}
 
 
-def main(args):
-    # configure logger, disable logging in child MPI processes (with rank > 0)
-
-    alg = 'ppo2'
-    # alg = 'acer'
-    # alg = 'her'
-    env = 'SC2MoveToBeacon-v0'
-    model_path = '~/models/{}_{}'.format(env, alg)
-    # network = 'cnn_lstm'
-    network = 'cnn'
-    num_env = 4
-    nminibatches = 2
-    nstep = 200
-
-    args = ['I:\\Projects\\openai\\baselines\\baselines\\run.py',
-            '--alg={}'.format(alg),
-            '--env={}'.format(env),
-            '--num_timesteps=1e7',
-            f'--nsteps={nstep}',
-            f'--save_path={model_path}',
-            f'--network={network}',
-            f'--num_env={num_env}',
-            f'--nminibatches={nminibatches}',
-            '--save_interval=200',
-            ]
-
+def get_default_args():
     arg_parser = common_arg_parser()
-    args, unknown_args = arg_parser.parse_known_args(args)
-    extra_args = parse_cmdline_kwargs(unknown_args)
+    default_args = ({action.dest: action.default for action in arg_parser._actions if isinstance(action, _StoreAction)})
+    return default_args
+
+
+def main(_):
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yml'), 'r') as f:
+        configs = Arguments(**yaml.load(f))
+
+    default_args = get_default_args()
+    args = default_args.copy()
+    args.update(configs)
+
+    extra_args = {key: args[key] for key in args if key not in default_args}
+    args = Arguments(**{key: args[key] for key in args if key in default_args})
 
     if args.extra_import is not None:
         import_module(args.extra_import)
@@ -269,7 +259,7 @@ def main(args):
     # save_graph("i:/tmp/")
 
     if args.save_path is not None and rank == 0:
-        save_path = osp.expanduser(args.save_path)
+        save_path = os.path.expanduser(args.save_path)
         model.save(save_path)
 
     if args.play:
