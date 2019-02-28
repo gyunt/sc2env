@@ -1,7 +1,7 @@
 import tensorflow as tf
-from baselines.common.tf_util import get_session
 
 
-def save_graph(path):
-    writer = tf.summary.FileWriter(path, get_session().graph)
+def save_graph(path, sess=None):
+    sess = sess or tf.get_default_session()
+    writer = tf.summary.FileWriter(path, sess.graph)
     writer.flush()

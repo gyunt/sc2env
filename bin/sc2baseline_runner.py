@@ -4,13 +4,12 @@ import sys
 from collections import defaultdict
 from importlib import import_module
 
-import sc2env
 import gym
 import numpy as np
 import tensorflow as tf
 from baselines import logger
 from baselines.common.cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_env
-from baselines.common.tf_util import get_session
+from baselines.common.tf_util import get_session, display_var_info
 from baselines.common.vec_env.vec_frame_stack import VecFrameStack
 from baselines.common.vec_env.vec_normalize import VecNormalize
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
@@ -94,6 +93,7 @@ def train(args, extra_args):
         env=env,
         seed=seed,
         total_timesteps=total_timesteps,
+        value_network='copy',
         **alg_kwargs
     )
 
@@ -224,20 +224,25 @@ def main(args):
     # configure logger, disable logging in child MPI processes (with rank > 0)
 
     alg = 'ppo2'
+    # alg = 'acer'
+    # alg = 'her'
     env = 'SC2MoveToBeacon-v0'
     model_path = '~/models/{}_{}'.format(env, alg)
+    # network = 'cnn_lstm'
     network = 'cnn'
     num_env = 4
+    nminibatches = 2
+    nstep = 200
 
     args = ['I:\\Projects\\openai\\baselines\\baselines\\run.py',
             '--alg={}'.format(alg),
             '--env={}'.format(env),
             '--num_timesteps=1e7',
-            '--nsteps=700',
+            f'--nsteps={nstep}',
             f'--save_path={model_path}',
             f'--network={network}',
             f'--num_env={num_env}',
-            '--nminibatches=4',
+            f'--nminibatches={nminibatches}',
             '--save_interval=200',
             ]
 
@@ -257,6 +262,11 @@ def main(args):
 
     model, env = train(args, extra_args)
     env.close()
+
+    allvars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="ppo2_model")
+    display_var_info(allvars)
+
+    # save_graph("i:/tmp/")
 
     if args.save_path is not None and rank == 0:
         save_path = osp.expanduser(args.save_path)
@@ -282,8 +292,6 @@ def main(args):
 
             if done:
                 obs = env.reset()
-
-        env.close()
 
     return model
 
