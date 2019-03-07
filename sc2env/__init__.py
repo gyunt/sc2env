@@ -13,6 +13,16 @@ register(
 }
 )
 
+register(
+    id='SC2DefeatRoaches-v0',
+    entry_point='sc2env:SC2Env',
+    kwargs={
+  "map_name": "DefeatRoaches",
+  "feature_screen": 86,
+  "feature_minimap": 64
+}
+)
+
 def make(game, **kwargs):
     # from sc2env.sc2env import SC2Env
     # settings = data.get_settings(game)

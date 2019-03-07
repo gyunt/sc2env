@@ -94,8 +94,7 @@ class SC2Env(gym.Env):
             'step_mul': self.step_mul,
             'random_seed': self.random_seed,
             'map_name': map_name,
-            # 'realtime': True,
-
+            'realtime': False,
             'agent_interface_format': sc2_env.parse_agent_interface_format(
                 feature_screen=self.feature_screen,
                 feature_minimap=self.feature_minimap,
@@ -111,19 +110,8 @@ class SC2Env(gym.Env):
         }
 
         self._env = None
-        self.action_space_info = None
-
-        self.flatten_action = flatten_action
-        self._episode = 0
-        self._num_step = 0
-        self._episode_reward = 0
-        self._total_reward = 0
-        self._max_episode_steps = 200
-        self.init_action_space()
-        self.init_observation_space()
-
-    def init_action_space(self):
-        interested = [
+        self.action_info = {}
+        self.interested = [
             # 0,  # "no_op"
             # 2,  # "select_point"
             # 3,  # "select_rect"
@@ -146,46 +134,48 @@ class SC2Env(gym.Env):
             # 456,  # "Stop_Stop_quick"
             # 516,  # "UnloadAllAt_screen"
         ]
+        self.function_ids = []
 
-        action_spaces = []
-        total_space_size = 0
+        self.flatten_action = flatten_action
+        self._episode = 0
+        self._num_step = 0
+        self._episode_reward = 0
+        self._total_reward = 0
+        self._max_episode_steps = 200
+        self.init_action_space()
+        self.init_observation_space()
 
-        multiples = {
-            7: 84 * 84 / 2
-        }
+    def init_action_space(self):
+        index = 1
+        shape = [len(self.interested)]
 
-        for function_id in interested:
-            space_size = 1
+        for function_id in self.interested:
+            self.function_ids.append(function_id)
 
             for arg in actions.FUNCTIONS[function_id].args:
-                if arg.name not in ['queued', 'screen', 'select_point_act', 'select_add']:
-                    raise NotImplementedError
-
                 if arg.name == 'queued':
-                    pass
+                    continue
+                elif arg.name == 'select_add':
+                    continue
 
-                if arg.name == 'screen':
-                    space_size *= (self.feature_screen * self.feature_screen)
-                else:
-                    for size in arg.sizes:
-                        space_size *= size
+                if arg.name not in self.action_info:
+                    if 'screen' in arg.name:
+                        sizes = [self.feature_screen, self.feature_screen]
+                    else:
+                        sizes = list(arg.sizes)
 
-            if function_id in multiples:
-                space_size *= multiples[function_id]
-                multiple = multiples[function_id]
-            else:
-                multiple = 1
+                    self.action_info[arg.name] = {
+                        'size': sizes,
+                        'range': range(index, index + len(sizes))
+                    }
+                    shape += sizes
+                    index += len(sizes)
 
-            action_spaces.append({
-                'id': function_id,
-                'function': actions.FUNCTIONS[function_id],
-                'space_size': space_size,
-                'multiple': multiple
-            })
-            total_space_size += space_size
+        from pprint import pprint
+        pprint(self.action_info)
+        print(shape)
 
-        self.action_space_info = action_spaces
-        self.action_space = spaces.Discrete(int(total_space_size))
+        self.action_space = spaces.MultiDiscrete(shape)
 
     def init_observation_space(self):
         # see pysc2.lib.features.observation_spec
@@ -236,38 +226,20 @@ class SC2Env(gym.Env):
         if not self.flatten_action:
             return action
 
-        index = int(action)
-        for info in self.action_space_info:
-            if index < info['space_size']:
-                function = info['function']
-                function_id = info['id']
-                multiple = info['multiple']
-                break
-            index -= info['space_size']
-
-        index = int(index // multiple)
-
+        function_id = self.function_ids[action[0]]
         args = []
-        space_size = 1
-        for arg in self.action_spec[0].functions[function_id].args:
-            for size in arg.sizes:
-                if arg.name == 'queued':
-                    pass
-                space_size *= size
 
         for arg in self.action_spec[0].functions[function_id].args:
-            if arg.name == 'queued':
+            if arg.name in ['queued', 'select_add']:
                 a = [0]
             else:
                 a = []
-                for size in arg.sizes:
-                    space_size = int(space_size // size)
+                for i in self.action_info[arg.name]['range']:
+                    a.append(action[i])
 
-                    a.append(int(index // space_size))
-                    index %= space_size
-            if arg.name == 'screen':
+            if 'screen' in arg.name:
                 assert len(arg.sizes) == 2
-                a = list(reversed(a))
+                a[0], a[1] = a[1], a[0]
             args.append(a)
 
         this_action = [function_id] + args
@@ -356,3 +328,13 @@ class SC2Env(gym.Env):
     @property
     def total_reward(self):
         return self._total_reward
+
+    def seed(self, seed=None):
+        self.random_seed = seed
+
+        self._settings.update({
+            'random_seed': self.random_seed
+        })
+
+    def render(self, mode='human', **kwargs):
+        pass

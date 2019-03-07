@@ -1,3 +1,4 @@
+import logging
 import multiprocessing
 import os.path
 import sys
@@ -10,12 +11,23 @@ import numpy as np
 import tensorflow as tf
 import yaml
 from baselines import logger
+from baselines.a2c.utils import batch_to_seq, lnlstm, lstm, seq_to_batch
+from baselines.a2c.utils import conv, fc, conv_to_fc
 from baselines.common.cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_env
-from baselines.common.tf_util import get_session, display_var_info
+from baselines.common.tf_util import get_session
 from baselines.common.vec_env.vec_frame_stack import VecFrameStack
 from baselines.common.vec_env.vec_normalize import VecNormalize
 from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
+from sc2env.layers.capsule_layer2 import capsule
 from sc2env.utils import Arguments
+from vprof import runner
+
+logger_pysc2 = logging.getLogger('pysc2')
+logger_pysc2.setLevel(logging.DEBUG)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter('%(message)s'))
+logger_pysc2.addHandler(stream_handler)
 
 try:
     from mpi4py import MPI
@@ -92,14 +104,16 @@ def train(args, extra_args):
     print('Training {} on {}:{} with arguments \n{}'.format(args.alg, env_type, env_id, alg_kwargs))
     print(env.observation_space)
 
-    model = learn(
-        env=env,
-        seed=seed,
-        total_timesteps=total_timesteps,
-        value_network='copy',
-        **alg_kwargs
-    )
-
+    try:
+        model = learn(
+            env=env,
+            seed=seed,
+            total_timesteps=total_timesteps,
+            **alg_kwargs
+        )
+    except Exception as e:
+        env.close()
+        raise e
     return model, env
 
 
@@ -229,6 +243,108 @@ def get_default_args():
     return default_args
 
 
+def nature_cnn(unscaled_images, **conv_kwargs):
+    """
+    CNN from Nature paper.
+    """
+    scaled_images = unscaled_images  # tf.cast(unscaled_images, tf.float32) / 255.
+    activ = tf.nn.leaky_relu
+    h = activ(conv(scaled_images, 'c1', nf=32, rf=8, stride=4, init_scale=np.sqrt(2),
+                   **conv_kwargs))
+    h2 = activ(conv(h, 'c2', nf=64, rf=4, stride=2, init_scale=np.sqrt(2), **conv_kwargs))
+    h3 = activ(conv(h2, 'c3', nf=64, rf=3, stride=1, init_scale=np.sqrt(2), **conv_kwargs))
+    h3 = conv_to_fc(h3)
+    return activ(fc(h3, 'fc1', nh=512, init_scale=np.sqrt(2)))
+
+
+def hi(**conv_kwargs):
+    from baselines.a2c.utils import conv, fc
+
+    def network_fn(X):
+        h = tf.cast(X, tf.float32) / 255.
+
+        activ = tf.nn.relu
+        h = activ(conv(h, 'c1', nf=1, rf=3, stride=1, pad='SAME', init_scale=np.sqrt(2), **conv_kwargs))
+        h = tf.layers.flatten(h)
+        h = activ(fc(h, 'fc1', nh=128, init_scale=np.sqrt(2)))
+        return h
+
+    return network_fn
+
+
+def mlp(num_layers=2, num_hidden=128, activation=tf.nn.leaky_relu, layer_norm=False):
+    """
+    Stack of fully-connected layers to be used in a policy / q-function approximator
+
+    Parameters:
+    ----------
+
+    num_layers: int                 number of fully-connected layers (default: 2)
+
+    num_hidden: int                 size of fully-connected layers (default: 64)
+
+    activation:                     activation function (default: tf.tanh)
+
+    Returns:
+    -------
+
+    function that builds fully connected network with a given input tensor / placeholder
+    """
+
+    def network_fn(X):
+        h = tf.layers.flatten(X)
+        for i in range(num_layers):
+            h = fc(h, 'mlp_fc{}'.format(i), nh=num_hidden, init_scale=np.sqrt(2))
+            if layer_norm:
+                h = tf.contrib.layers.layer_norm(h, center=True, scale=True)
+            h = activation(h)
+
+        return h
+
+    return network_fn
+
+
+def caps(num_layers=2, num_hidden=128, activation=tf.nn.leaky_relu, layer_norm=False):
+    def network_fn(X):
+        h = tf.layers.flatten(X)
+        for i in range(num_layers):
+            h = fc(h, 'mlp_fc{}'.format(i), nh=num_hidden, init_scale=np.sqrt(2))
+            if layer_norm:
+                h = tf.contrib.layers.layer_norm(h, center=True, scale=True)
+            h = activation(h)
+
+        h = capsule(tf.expand_dims(h, axis=-1), 20, 5, output_type='vector')
+        return h
+
+    return network_fn
+
+
+def cnn_lstm(nlstm=128, layer_norm=False, **conv_kwargs):
+    def network_fn(X, nenv=1):
+        nbatch = X.shape[0]
+        nsteps = nbatch // nenv
+
+        h = nature_cnn(X, **conv_kwargs)
+
+        M = tf.placeholder(tf.float32, [nbatch])  # mask (done t-1)
+        S = tf.placeholder(tf.float32, [nenv, 2 * nlstm])  # states
+
+        xs = batch_to_seq(h, nenv, nsteps)
+        ms = batch_to_seq(M, nenv, nsteps)
+
+        if layer_norm:
+            h5, snew = lnlstm(xs, ms, S, scope='lnlstm', nh=nlstm)
+        else:
+            h5, snew = lstm(xs, ms, S, scope='lstm', nh=nlstm)
+
+        h = seq_to_batch(h5)
+        initial_state = np.zeros(S.shape.as_list(), dtype=float)
+
+        return h, {'S': S, 'M': M, 'state': snew, 'initial_state': initial_state}
+
+    return network_fn
+
+
 def main(_):
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yml'), 'r') as f:
         configs = Arguments(**yaml.load(f))
@@ -236,6 +352,8 @@ def main(_):
     default_args = get_default_args()
     args = default_args.copy()
     args.update(configs)
+    args.update({'network': mlp()})
+    play = args.pop('play')
 
     extra_args = {key: args[key] for key in args if key not in default_args}
     args = Arguments(**{key: args[key] for key in args if key in default_args})
@@ -251,10 +369,6 @@ def main(_):
         rank = MPI.COMM_WORLD.Get_rank()
 
     model, env = train(args, extra_args)
-    env.close()
-
-    allvars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="ppo2_model")
-    display_var_info(allvars)
 
     # save_graph("i:/tmp/")
 
@@ -262,7 +376,7 @@ def main(_):
         save_path = os.path.expanduser(args.save_path)
         model.save(save_path)
 
-    if args.play:
+    if play:
         logger.log("Running trained model")
         env = build_env(args)
         obs = env.reset()
@@ -274,7 +388,10 @@ def main(_):
             if state is not None:
                 actions, _, state, _ = model.step(obs, S=state, M=dones)
             else:
-                actions, _, _, _ = model.step(obs)
+                if args.alg == 'rnd_ppo':
+                    actions, _, _, _, _ = model.step(obs)
+                else:
+                    actions, _, _, _ = model.step(obs)
 
             obs, _, done, _ = env.step(actions)
             env.render()
@@ -287,4 +404,5 @@ def main(_):
 
 
 if __name__ == '__main__':
+    # runner.run(main, 'mhp', args=(sys.argv), host='127.0.0.1', port=8000)
     main(sys.argv)

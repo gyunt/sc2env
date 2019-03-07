@@ -1,11 +1,37 @@
-alg: 'ppo2'
+alg: 'rnd_ppo'
+#alg: 'ppo2'
 # alg: 'acer'
 # alg: her'
 env: 'SC2MoveToBeacon-v0'
-save_path: '~/models/SC2MoveToBeacon-v0/'
-network: 'cnn'
-num_env: 4
+#env: 'SC2DefeatRoaches-v0'
+#save_path: '~/models/SC2MoveToBeacon-v0/rnd_ppo'
+#load_path: '~/models/SC2MoveToBeacon-v0/rnd_ppo'
+#load_path: 'C:\Users\truth\AppData\Local\Temp\openai-2019-03-08-09-59-30-325723\checkpoints\00200'
+#network: 'lstm'
+
+play: false
+nsteps: 128
+num_env: 8
 nminibatches: 2
-nsteps: 200
-save_interval: 200
+#num_env: 1
+#nminibatches: 1
+save_interval: 100
+#seed: 2019
+value_network: 'copy'
+#value_network: 'shared'
+#num_timesteps: 40000
+num_timesteps: 160000 #(200 updates) * (nbatch = nevns * nsteps)
+#num_timesteps: 240000 #(300 updates) * (nbatch = nevns * nsteps)
+int_coef: 0.001
+ext_coef: 2.0
+ent_coef: 0.001
+vf_coef: 0.5
+cliprange: 0.1
+gamma: 0.999
+gamma_int: 0.95
+
+#num_env: 1
+#nminibatches: 1
+#num_timesteps: 0 #for play
+#play: True
 
